@@ -13,19 +13,23 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Optional
+import platform
 
 import requests
 from openai import OpenAI
+from ollama import chat
+from dotenv import load_dotenv
 
+load_dotenv()
 # Configuration
 BASE_URL = "https://openrouter.ai/api/v1"
-API_KEY = os.environ["OPENROUTER_API_KEY"]
-MODEL = "poolside/laguna-s-2.1:free"
+# API_KEY = os.environ["OPENROUTER_API_KEY"]
+MODEL = "gemma4:12b"
 FIRECRAWL_API_KEY = os.environ["FIRECRAWL_API_KEY"]
 MAX_WEB_CONTENT_LENGTH = 5000
 
 # Initialize client
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+# client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 
 @dataclass
@@ -371,7 +375,7 @@ def get_system_prompt() -> str:
     prompt = (
         "You are nanocode, a terminal coding agent. Be concise. Prefer tools over guessing.\n"
         "Use the todo_write tool to plan any task with more than a couple of steps.\n\n"
-        f"Environment:\ncwd: {os.getcwd()}\nos: {os.uname().sysname}\n"
+        f"Environment:\ncwd: {os.getcwd()}\nos: {platform.system()}\n"
         f"files in cwd: {', '.join(sorted(os.listdir()))}"
     )
     
@@ -392,15 +396,15 @@ def parse_tool_calls(stream) -> tuple[str, list[ToolCall], Optional[str]]:
     finish_reason = None
 
     for chunk in stream:
-        choice = chunk.choices[0]
-        
+        choice = chunk.message
+        print(choice)
         # Handle content
-        if choice.delta.content:
-            print(choice.delta.content, end="", flush=True)
-            reply += choice.delta.content
+        if choice.content:
+            print(choice.content, end="", flush=True)
+            reply += choice.content
         
         # Handle tool calls
-        for tc in choice.delta.tool_calls or []:
+        for tc in choice.tool_calls or []:
             if tc.index >= len(tool_calls):
                 tool_calls.append(ToolCall(id="", name=""))
             
@@ -410,8 +414,8 @@ def parse_tool_calls(stream) -> tuple[str, list[ToolCall], Optional[str]]:
             call.arguments += tc.function.arguments or ""
         
         # Handle finish
-        if choice.finish_reason:
-            finish_reason = choice.finish_reason
+        if choice.thinking:
+            finish_reason = choice.thinking
     
     print()  # New line after streaming
     return reply, tool_calls, finish_reason
@@ -440,11 +444,12 @@ def run_agent(
 
     for _ in range(config.max_iterations):
         try:
-            stream = client.chat.completions.create(
+            stream = chat(
                 model=MODEL, 
                 messages=messages, 
                 tools=tool_schemas, 
-                stream=True
+                stream=True,
+                think=True
             )
         except Exception as e:
             print(f"\nError calling API: {e}", file=sys.stderr)
