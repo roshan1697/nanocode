@@ -19,17 +19,38 @@ import requests
 from openai import OpenAI
 from ollama import chat
 from dotenv import load_dotenv
+from prompt_toolkit import prompt
+from prompt_toolkit.key_binding import KeyBindings
 
 load_dotenv()
 # Configuration
-BASE_URL = "https://openrouter.ai/api/v1"
-# API_KEY = os.environ["OPENROUTER_API_KEY"]
+BASE_URL = "http://localhost:11434/v1"
+API_KEY = os.environ["OLLAMA_API_KEY"]
 MODEL = "gemma4:12b"
 FIRECRAWL_API_KEY = os.environ["FIRECRAWL_API_KEY"]
 MAX_WEB_CONTENT_LENGTH = 5000
 
 # Initialize client
-# client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+
+#Keybinding
+kb = KeyBindings()
+
+#Bind standard 'Enter' to submit the text immediately
+@kb.add('c-m')
+def _(event):
+    event.current_buffer.validate_and_handle()
+
+#Bind 'Alt + Enter' to insert a new line
+@kb.add('escape', 'enter')
+def _(event):
+    event.current_buffer.insert_text('\n')
+
+#Bind 'Ctrl + l' to insert a new line
+@kb.add('c-l')
+def _(event):
+    event.current_buffer.insert_text('\n')
+
 
 
 @dataclass
@@ -396,15 +417,15 @@ def parse_tool_calls(stream) -> tuple[str, list[ToolCall], Optional[str]]:
     finish_reason = None
 
     for chunk in stream:
-        choice = chunk.message
-        print(choice)
+        choice = chunk.choices[0]
+        
         # Handle content
-        if choice.content:
-            print(choice.content, end="", flush=True)
-            reply += choice.content
+        if choice.delta.content:
+            print(choice.delta.content, end="", flush=True)
+            reply += choice.delta.content
         
         # Handle tool calls
-        for tc in choice.tool_calls or []:
+        for tc in choice.delta.tool_calls or []:
             if tc.index >= len(tool_calls):
                 tool_calls.append(ToolCall(id="", name=""))
             
@@ -414,8 +435,8 @@ def parse_tool_calls(stream) -> tuple[str, list[ToolCall], Optional[str]]:
             call.arguments += tc.function.arguments or ""
         
         # Handle finish
-        if choice.thinking:
-            finish_reason = choice.thinking
+        if choice.finish_reason:
+            finish_reason = choice.finish_reason
     
     print()  # New line after streaming
     return reply, tool_calls, finish_reason
@@ -444,12 +465,12 @@ def run_agent(
 
     for _ in range(config.max_iterations):
         try:
-            stream = chat(
+            stream = client.chat.completions.create(
                 model=MODEL, 
                 messages=messages, 
                 tools=tool_schemas, 
                 stream=True,
-                think=True
+                reasoning_effort='high'
             )
         except Exception as e:
             print(f"\nError calling API: {e}", file=sys.stderr)
@@ -539,6 +560,7 @@ def print_banner():
     print("┌──────────────────────────────────────────────┐")
     print("│ nanocode — a tiny coding agent               │")
     print("│ /plan toggles plan mode · ctrl-c/ctrl-d quits │")
+    print("│ 'Alt + Enter' or 'Ctrl + l' for new line     │")
     print("└──────────────────────────────────────────────┘")
 
 
@@ -552,8 +574,10 @@ def main():
     
     while True:
         try:
-            prompt = "plan > " if plan_mode else "> "
-            user_input = input(prompt)
+            p_text = "plan > " if plan_mode else "> "
+            user_input = prompt(p_text,
+                                multiline=True,
+                                key_bindings=kb)
             
             if user_input.strip() == "/plan":
                 plan_mode = not plan_mode
