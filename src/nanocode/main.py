@@ -17,7 +17,6 @@ import platform
 
 import requests
 from openai import OpenAI
-from ollama import chat
 from dotenv import load_dotenv
 from prompt_toolkit import prompt
 from prompt_toolkit.key_binding import KeyBindings
@@ -31,7 +30,7 @@ FIRECRAWL_API_KEY = os.environ["FIRECRAWL_API_KEY"]
 MAX_WEB_CONTENT_LENGTH = 5000
 
 # Initialize client
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+client = OpenAI(base_url=BASE_URL, api_key=API_KEY) 
 
 #Keybinding
 kb = KeyBindings()
@@ -450,6 +449,60 @@ def get_user_approval(tool: Tool, args: dict[str, Any]) -> bool:
     except (EOFError, KeyboardInterrupt):
         return False
 
+#path switch
+def resolve_working_directory() -> str:
+    """Ask the user whether to work in the current directory or a different path."""
+    cwd = os.getcwd()
+    answer = input(
+        f"Work in current directory ({cwd})? [Enter = yes, or paste a path to use instead] "
+    ).strip()
+
+    if not answer:
+        return cwd
+
+    path = os.path.abspath(os.path.expanduser(answer))
+
+    if not os.path.exists(path):
+        create = input(f"'{path}' doesn't exist. Create it? [y/n] ").strip().lower()
+        if create != "y":
+            print(f"Staying in current directory: {cwd}")
+            return cwd
+        os.makedirs(path, exist_ok=True)
+    elif not os.path.isdir(path):
+        print(f"'{path}' is not a directory. Staying in current directory: {cwd}")
+        return cwd
+
+    os.chdir(path)
+    return path
+
+#Tool argument validator
+def validate(instance, schema):
+    
+    # Check type
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        if not isinstance(instance, dict):
+            return f"Expected object, got {type(instance).__name__}"
+        
+        # Check required fields
+        for req in schema.get("required", []):
+            if req not in instance:
+                return f"Missing required property: '{req}'"
+                
+        # Check properties recursively
+        props = schema.get("properties", {})
+        for key, subschema in props.items():
+            if key in instance:
+                validate(instance[key], subschema)
+                
+    elif schema_type == "string":
+        if not isinstance(instance, str):
+            return f"Expected string, got {type(instance).__name__}"
+            
+    elif schema_type == "number":
+        if not isinstance(instance, (int, float)) or isinstance(instance, bool):
+            return f"Expected number, got {type(instance).__name__}"
+
 
 def run_agent(
     messages: list[dict[str, Any]], 
@@ -514,6 +567,14 @@ def run_agent(
                         "content": f"Error: Unknown tool {tc.name}"
                     })
                     continue
+                valid = validate(json.loads(tc.arguments),tool.parameters)
+                if valid is not None:
+                    messages.append({
+                        "role":"tool",
+                        "tool_call_id":tc.id,
+                        "content":valid
+                    })
+                    continue
 
                 # Handle plan mode restrictions
                 if config.plan_mode and not tool.is_read_only:
@@ -567,6 +628,9 @@ def print_banner():
 def main():
     """Main entry point for the agent."""
     print_banner()
+
+    working_dir = resolve_working_directory()
+    print(f"Working in: {working_dir}\n")
     
     plan_mode = False
     messages = [{"role": "system", "content": get_system_prompt()}]
