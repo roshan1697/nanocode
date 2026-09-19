@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Optional
 import platform
+import difflib
 
 import requests
 from openai import OpenAI
@@ -443,11 +444,99 @@ def parse_tool_calls(stream) -> tuple[str, list[ToolCall], Optional[str]]:
 
 def get_user_approval(tool: Tool, args: dict[str, Any]) -> bool:
     """Prompt user for approval before executing a write tool."""
+    cleanedargs = readable_approval_prompt(tool.name,args)
     try:
-        answer = input(f"{tool.name}({json.dumps(args)}) [y/n] ")
+        answer = input(f"{tool.name}: {cleanedargs} [y/n] ")
         return answer.strip().lower() == "y"
     except (EOFError, KeyboardInterrupt):
         return False
+
+#readable approval prompt
+def readable_approval_prompt(toolname:str,toolargs:dict[str, Any]):
+    if toolname == 'write_file':
+        path = toolargs['path']
+        content = toolargs['content']
+        byte_count = len(content.encode('utf-8'))
+        lines = content.splitlines()
+        line_count = len(lines)
+    
+        preview_lines = lines[:10]
+        preview = "\n".join(preview_lines)
+    
+        if line_count > 10:
+            preview += "\n... (content truncated) ..."
+
+        prompt = (
+        f"⚠️ Action Required: Approve File Write\n\n"
+        f"File Path:  {path}\n"
+        f"Size:       {line_count} lines ({byte_count:,} bytes)\n\n"
+        f"Preview (First 10 lines):\n"
+        f"{'-'*70}\n"
+        f"{preview}\n"
+        f"{'-'*70}\n\n"
+        f"Allow this action? "
+        )
+    
+        return prompt
+
+    if toolname == 'edit_file':
+        path = toolargs.path
+        old_lines = toolargs['old_string'].splitlines()
+        new_lines = toolargs['new_string'].splitlines()
+    
+        diff_generator = difflib.unified_diff(
+        old_lines, 
+        new_lines, 
+        fromfile='old_string', 
+        tofile='new_string', 
+        lineterm=''  # Prevents double-spacing in the output
+        )
+    
+        diff_text = "\n".join(diff_generator)
+    
+        if not diff_text:
+            diff_text = "(No changes detected between old_string and new_string)"
+
+        prompt = (
+        f"⚠️ Action Required: Approve File Edit\n\n"
+        f"File Path:  {path}\n\n"
+        f"Diff Preview:\n"
+        f"{'-'*70}\n"
+        f"{diff_text}\n"
+        f"{'-'*70}\n\n"
+        f"Allow this action? "
+        )
+    
+        return prompt
+
+    if toolname == 'bash':
+        command = toolargs['command']
+        prompt = (
+        f"⚠️ Action Required: Approve Shell Command\n\n"
+        f"Command:\n"
+        f"{'-'*70}\n"
+        f"{command}\n"
+        f"{'-'*70}\n\n"
+        f"Allow this action? "
+        )
+    
+        return prompt
+
+    if toolname == 'task':
+        description = toolargs['description']
+        prompt_text = toolargs['prompt_text']
+        prompt = (
+        f"⚠️ Action Required: Approve Sub-Agent Task\n\n"
+        f"Task:  {description}\n\n"
+        f"Instructions (Prompt):\n"
+        f"{'-'*70}\n"
+        f"{prompt_text}\n"
+        f"{'-'*70}\n\n"
+        f"Allow this action?"
+        )
+    
+        return prompt
+    return toolargs
 
 #path switch
 def resolve_working_directory() -> str:
